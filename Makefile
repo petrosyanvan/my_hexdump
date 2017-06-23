@@ -1,10 +1,7 @@
-obj-m   := my_hexdump.o
 
-KERNELDIR ?= /lib/modules/$(shell uname -r)/build
-PWD       := $(shell pwd)
+obj-m+=copy.o
 
 all:
-    $(MAKE) -C $(KERNELDIR) M=$(PWD)
-
+	make -C /lib/modules/$(shell uname -r)/build/ M=$(PWD) modules
 clean:
-    rm -rf *.o *~ core .depend .*.cmd *.ko *.mod.c .tmp_versions
+	make -C /lib/modules/$(shell uname -r)/build/ M=$(PWD) clean
