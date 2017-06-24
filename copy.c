@@ -13,7 +13,6 @@
 #include <linux/device.h>         // Header to support the kernel Driver Model
 #include <linux/kernel.h>         // Contains types, macros, functions for the kernel
 #include <linux/fs.h>             // Header for the Linux file system support
-#include <linux/slab.h> 
 #include <asm/uaccess.h>          // Required for the copy to user function
 #define  DEVICE_NAME "copy"    ///< The device will appear at /dev/copy using this value
 #define  CLASS_NAME  "copy"        ///< The device class -- this is a character device driver
@@ -27,6 +26,7 @@ MODULE_VERSION("0.1");            ///< A version number to inform users
 static int    majorNumber;                  ///< Stores the device number -- determined automatically
 static struct class*  copyClass  = NULL; ///< The device-driver class struct pointer
 static struct device* copyDevice = NULL; ///< The device-driver device struct pointer
+static char dev_write_flag = 0;              // identifier for device write state
  
 // The prototype functions for the character driver -- must come before the struct definition
 static int     dev_open(struct inode *, struct file *);
@@ -101,6 +101,7 @@ static void __exit copy_exit(void){
  */
 static int dev_open(struct inode *inodep, struct file *filep){
    printk(KERN_INFO "Copy: Device has been opened\n");
+   dev_write_flag = 0;
    return 0;
 }
  
@@ -116,15 +117,26 @@ static int dev_open(struct inode *inodep, struct file *filep){
 static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset){
    struct file *filp = NULL;
    mm_segment_t old_fs ;
-   loff_t pos = 0;
+   static loff_t pos = 0;
    char dmp[4];
    int i;
+   int flags;
+
+   // Check if this is first part of file then delete previous outputs from /tmp/output 
+   if(dev_write_flag == 0){
+      pos = 0;
+      dev_write_flag = 1;
+      flags = O_WRONLY|O_CREAT|O_TRUNC;
+   }
+   else
+      flags = O_WRONLY|O_CREAT;
    // open or create file, erase previous content
-   filp = filp_open(OUTPUT_DIRECTORY, O_WRONLY|O_CREAT|O_TRUNC, 0644);
+   filp = filp_open(OUTPUT_DIRECTORY, flags, 0644);
    if(IS_ERR(filp)){
       printk(KERN_INFO "Copy: Couldn't open output file\n");
       return -EFAULT;
    }
+   
    old_fs = get_fs();
    set_fs(KERNEL_DS);
    // hexdump implementation
@@ -134,9 +146,9 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
       else
          sprintf(dmp, "%02x ", buffer[i]);
       vfs_write(filp, dmp, strlen(dmp), &pos);
-      printk(dmp);
-   }
-
+      //printk(dmp);
+      //printk("%lld ", pos);
+   }  
    set_fs(old_fs);
    filp_close(filp, NULL); 
    return len;
