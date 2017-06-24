@@ -56,7 +56,7 @@ static int __init copy_init(void){
    // Try to dynamically allocate a major number for the device -- more difficult but worth it
    majorNumber = register_chrdev(0, DEVICE_NAME, &fops);
    if (majorNumber<0){
-      printk(KERN_ALERT "Copy failed to register a major number\n");
+      printk(KERN_ALERT "Copy: failed to register a major number\n");
       return majorNumber;
    }
    printk(KERN_INFO "Copy: registered correctly with major number %d\n", majorNumber);
@@ -120,16 +120,14 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
    static loff_t pos = 0;
    char dmp[4];
    int i;
-   int flags;
+   int flags = O_WRONLY|O_CREAT;
 
    // Check if this is first part of file then delete previous outputs from /tmp/output 
    if(dev_write_flag == 0){
       pos = 0;
       dev_write_flag = 1;
-      flags = O_WRONLY|O_CREAT|O_TRUNC;
+      flags |= O_TRUNC;
    }
-   else
-      flags = O_WRONLY|O_CREAT;
    // open or create file, erase previous content
    filp = filp_open(OUTPUT_DIRECTORY, flags, 0644);
    if(IS_ERR(filp)){
@@ -146,8 +144,6 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
       else
          sprintf(dmp, "%02x ", buffer[i]);
       vfs_write(filp, dmp, strlen(dmp), &pos);
-      //printk(dmp);
-      //printk("%lld ", pos);
    }  
    set_fs(old_fs);
    filp_close(filp, NULL); 
