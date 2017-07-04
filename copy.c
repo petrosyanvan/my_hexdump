@@ -13,6 +13,7 @@
 #include <linux/device.h>         // Header to support the kernel Driver Model
 #include <linux/kernel.h>         // Contains types, macros, functions for the kernel
 #include <linux/fs.h>             // Header for the Linux file system support
+#include <linux/mutex.h>            /// Required for the mutex functionality
 #include <asm/uaccess.h>          // Required for the copy to user function
 #define  DEVICE_NAME "copy"    ///< The device will appear at /dev/copy using this value
 #define  CLASS_NAME  "copy"        ///< The device class -- this is a character device driver
@@ -26,7 +27,9 @@ MODULE_VERSION("0.1");            ///< A version number to inform users
 static int    majorNumber;                  ///< Stores the device number -- determined automatically
 static struct class*  copyClass  = NULL; ///< The device-driver class struct pointer
 static struct device* copyDevice = NULL; ///< The device-driver device struct pointer
-static char dev_write_flag = 0;              // identifier for device write state
+static struct file *filp = NULL;
+static loff_t pos = 0;
+static DEFINE_MUTEX(copy_mutex);          /// A macro that is used to declare a new mutex that is visible in this file
  
 // The prototype functions for the character driver -- must come before the struct definition
 static int     dev_open(struct inode *, struct file *);
@@ -78,15 +81,17 @@ static int __init copy_init(void){
       printk(KERN_ALERT "Failed to create the device\n");
       return PTR_ERR(copyDevice);
    }
+   mutex_init(&copy_mutex);       /// Initialize the mutex lock dynamically at runtime
    printk(KERN_INFO "Copy: device class created correctly\n"); // Made it! device was initialized
    return 0;
 }
  
 /** @brief The LKM cleanup function
  *  Similar to the initialization function, it is static. The __exit macro notifies that if this
- *  code is used for a built-in driver (not a LKM) that this function is not required.
+ *  code is used for a built-in driver (not a LKM) that this function is notl required.
  */
 static void __exit copy_exit(void){
+   mutex_destroy(&copy_mutex);        /// destroy the dynamically-allocated mutex
    device_destroy(copyClass, MKDEV(majorNumber, 0));     // remove the device
    class_unregister(copyClass);                          // unregister the device class
    class_destroy(copyClass);                             // remove the device class
@@ -95,13 +100,28 @@ static void __exit copy_exit(void){
 }
  
 /** @brief The device open function that is called each time the device is opened
- *  This will only increment the numberOpens counter in this case.
+ *  This will only open /tmp/output file and set position to zero.
  *  @param inodep A pointer to an inode object (defined in linux/fs.h)
  *  @param filep A pointer to a file object (defined in linux/fs.h)
  */
 static int dev_open(struct inode *inodep, struct file *filep){
+   mm_segment_t old_fs ;   
    printk(KERN_INFO "Copy: Device has been opened\n");
-   dev_write_flag = 0;
+   if(!mutex_trylock(&copy_mutex)){    /// Try to acquire the mutex (i.e., put the lock on/down)
+                                          /// returns 1 if successful and 0 if there is contention
+      printk(KERN_ALERT "Copy: Device in use by another process");
+      return -EBUSY;
+   }
+   // open or create file, erase previous content
+   old_fs = get_fs();
+   set_fs(KERNEL_DS);
+   filp = filp_open(OUTPUT_DIRECTORY, O_WRONLY|O_CREAT|O_TRUNC, 0644);
+   set_fs(old_fs);
+   if(IS_ERR(filp)){
+      printk(KERN_INFO "Copy: Couldn't open output file\n");
+      return -EFAULT;
+   }
+   pos = 0; // set position to zero
    return 0;
 }
  
@@ -115,38 +135,21 @@ static int dev_open(struct inode *inodep, struct file *filep){
  *  @param offset The offset if required
  */
 static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset){
-   struct file *filp = NULL;
-   mm_segment_t old_fs ;
-   static loff_t pos = 0;
+   
+   mm_segment_t old_fs ;   
    char dmp[4];
    int i;
-   int flags = O_WRONLY|O_CREAT;
-
-   // Check if this is first part of file then delete previous outputs from /tmp/output 
-   if(dev_write_flag == 0){
-      pos = 0;
-      dev_write_flag = 1;
-      flags |= O_TRUNC;
-   }
-   // open or create file, erase previous content
-   filp = filp_open(OUTPUT_DIRECTORY, flags, 0644);
-   if(IS_ERR(filp)){
-      printk(KERN_INFO "Copy: Couldn't open output file\n");
-      return -EFAULT;
-   }
-   
    old_fs = get_fs();
    set_fs(KERNEL_DS);
    // hexdump implementation
-   for (i = 0; i < len; i++){      
+   for (i = 0; i < len; i++){   
       if(((i + 1) % 8) == 0)
-         sprintf(dmp, "%02x\n", buffer[i]);
+         sprintf(dmp, "%02x\n", (unsigned char)buffer[i]);
       else
-         sprintf(dmp, "%02x ", buffer[i]);
-      vfs_write(filp, dmp, strlen(dmp), &pos);
+         sprintf(dmp, "%02x ", (unsigned char)buffer[i]);
+      vfs_write(filp, dmp, strlen(dmp), &pos); 
    }  
    set_fs(old_fs);
-   filp_close(filp, NULL); 
    return len;
 }
  
@@ -157,6 +160,8 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
  */
 static int dev_release(struct inode *inodep, struct file *filep){
    printk(KERN_INFO "Copy: Device successfully closed\n");
+   filp_close(filp, NULL); // close file
+   mutex_unlock(&copy_mutex);          /// Releases the mutex (i.e., the lock goes up)
    return 0;
 }
  
